@@ -2,24 +2,6 @@ import bpy
 import bmesh
 import struct
 import math
-# stolen
-def quaternion_to_euler_angle(w, x, y, z):
-    ysqr = y * y
-
-    t0 = +2.0 * (w * x + y * z)
-    t1 = +1.0 - 2.0 * (x * x + ysqr)
-    X = math.degrees(math.atan2(t0, t1))
-
-    t2 = +2.0 * (w * y - z * x)
-    t2 = +1.0 if t2 > +1.0 else t2
-    t2 = -1.0 if t2 < -1.0 else t2
-    Y = math.degrees(math.asin(t2))
-
-    t3 = +2.0 * (w * z + x * y)
-    t4 = +1.0 - 2.0 * (ysqr + z * z)
-    Z = math.degrees(math.atan2(t3, t4))
-
-    return X, Y, Z
 
 
 model_header_size = 24
@@ -36,44 +18,67 @@ class model_vertex:
     x = 0.0     # 0x00, float
     y = 0.0     # 0x04, float
     z = 0.0     # 0x08, float
-    n_x = 0.0   # 0x0C, ushort?
-    n_y = 0.0   # 0x0E, ushort?
-    n_z = 0.0   # 0x10, ushort?
-    n_w = 0.0   # 0x12, ushort?
+    n_x = 0.0   # 0x0C, uint
+    n_y = 0.0   # 0x10, uint
     uv_x = 0.0  # 0x14, float16
     uv_y = 0.0  # 0x16, float16
 
 
+class model_mesh_unk:
+    unk1 = 0 # uint
+    unk2 = 0 # uint
+    unk3 = 0 # uint
+    unk4 = 0 # uint, larger number? flags?
+
+class model_mesh_part:
+    label = ""
+    first_vert_index = 0
+    last_vert_index = 0 
+    indices_offset = 0 
+    triangles_count = 0
+    coord_stuff = []
+    _first_vert_index = 0
+    _indices_offset = 0
+    vert_count = 0
 class model_mesh:
     name = "" # 0x00, 66bytes
-    unk4byters = [] # 0x04, 72 bytes
-    # unk1 = 0 # 0x42, 4bytes
-    # unk2 = 0 # 0x46, 4bytes
-    # unk3 = 0 # 0x4A, 4bytes
-    # unk4 = 0 # 0x4E, 4bytes
-    # unk5 = 0 # 0x52, 4bytes
-    # unk6 = 0 # 0x56, 4bytes
-    # unk8 = 0 # 0x5A, 4bytes
-    # unk9 = 0 # 0x5E, 4bytes
-    # unk10 = 0 # 0x62, 4bytes
-    # unk11 = 0 # 0x66, 4bytes
-    # unk12 = 0 # 0x6A, 4bytes
-    # unk13 = 0 # 0x6E, 4bytes
-    # unk14 = 0 # 0x72, 4bytes
-    # unk15 = 0 # 0x76, 4bytes
-    # unk16 = 0 # 0x7A, 4bytes
-    # unk17 = 0 # 0x7E, 4bytes
-    # unk18 = 0 # 0x82, 4bytes
-    # unk19 = 0 # 0x86, 4bytes
-    label = "" # 0x8A, 10bytes
-    indices_offset = 0 # 0x94, 4bytes
-    last_indices_offset = 0 # 0x98, 4bytes
-    unk_offset = 0 # 0x9C, 4bytes
-    unk_count = 0 # 0xA0, 4bytes
-    coord_stuff = [] # 0xA4, 64bytes
-    _indices_offset = 0 # 0xE4, 4bytes
-    _unk_offset = 0 # 0xE8, 4bytes
-    indices_count = 0 # 0xEC, 4bytes
+    unk_count = 0
+    unkers = []
+    part_count = 0
+    parts = []
+
+def read_model_mesh(f):
+    f.read(4) # this int is unknown for now
+    meshes_count = read_uint(f)
+    meshes = []
+    for i in range(0, meshes_count):
+        mesh = model_mesh()
+        mesh.name = read_string(f)
+        mesh.unk_count = read_uint(f)
+        for js in range(0, mesh.unk_count):
+            unker = model_mesh_unk()
+            unker.unk1 = read_uint(f)
+            unker.unk2 = read_uint(f)
+            unker.unk3 = read_uint(f)
+            unker.unk4 = read_uint(f)
+            mesh.unkers.append(unker)
+
+        mesh.part_count = read_uint(f)
+        for js in range(0, mesh.part_count):
+            part = model_mesh_part()
+            part.label = read_string(f)
+            part.first_vert_index = read_uint(f)
+            part.last_vert_index = read_uint(f)
+            part.indices_offset = read_uint(f)
+            part.triangles_count = read_uint(f)
+            part.coord_stuff = f.read(64)
+            part._first_vert_index = read_uint(f)
+            part._indices_offset = read_uint(f)
+            part.vert_count = read_uint(f)
+            mesh.parts.append(part)
+
+        meshes.append(mesh)
+    return meshes
 
 
 # shorthand functions
@@ -95,7 +100,17 @@ def read_byte(f):   return struct.unpack('b', read(f, 1))[0]
 def read_float(f): return struct.unpack('f', read(f, 4))[0]
 def read_float16(f): return struct.unpack('e', read(f, 2))[0]
 
-def read_float_ushort(f): return ((read_ushort(f) / 65535.0) * 2.0) - 1.0
+def read_norm(f): 
+    read_value = read_uint(f)
+
+    #thing = (read_value / 4294967295.0)  * (360)
+    thing = (((read_value / 4294967295.0) * 2.0) - 1.0) * (math.pi*2)
+    #if (thing > math.pi*1) and (thing < math.pi*3):
+    #    thing = 0.0 # (math.pi*2) - thing
+
+    return thing
+    return (((read_uint(f) / 4294967295) * 2.0) - 1.0) * (math.pi*2)
+    #return (read_int(f) / 2147483647.5) * (math.pi*2)
 
 def read_string(f): 
     result = bytearray()
@@ -105,35 +120,20 @@ def read_string(f):
         curr_byte = f.read(1)
     return result.decode('utf-8')
 
-def read_some_data(context, filepath, use_some_setting):
-    print("running read_some_data...")
-    f = open(filepath, mode="rb")
-    #f.close()
+def read_fixed_string(f, length):
+    return f.read(length).decode('utf-8')
 
-    # read model header
+
+def read_model_header(f):
     header = model_header()
     header.unk1 = read_int(f)
     header.signature = read_string(f)
     header.unk2 = read_short(f)
     header.unk3 = read_short(f)
-    header.something = read_int(f)
-    header.vert_byte_length = read_int(f)
-    # read verts
-    vert_count = header.vert_byte_length // model_vertex_size
-    verts = []
-    for i in range(0, vert_count):
-        vert = model_vertex()
-        vert.x = read_float(f)
-        vert.y = read_float(f)
-        vert.z = read_float(f)
-        vert.n_x = read_float_ushort(f)
-        vert.n_y = read_float_ushort(f)
-        vert.n_z = read_float_ushort(f)
-        vert.n_w = read_float_ushort(f)
-        vert.uv_x = read_float16(f)
-        vert.uv_y = read_float16(f)
-        verts.append(vert)
-    
+    return header
+
+
+def read_model_indices(f):
     # read indices
     indicies_byte_length = read_uint(f)
     indicies_width = read_uint(f)
@@ -146,106 +146,235 @@ def read_some_data(context, filepath, use_some_setting):
         for i in range(0, indicies_byte_length):
             indices.append(read_ushort(f))
     else: raise Exception("bad vert indices byte width")
+    return indices
+
+def read_some_data(context, filepath, use_some_setting):
+    print("running read_some_data...")
+    f = open(filepath, mode="rb")
+    header = read_model_header(f)
+
+    vert_something = read_int(f)
+    vert_byte_length = read_int(f)
+    # read verts
+    vert_count = vert_byte_length // model_vertex_size
+    verts = []
+    for i in range(0, vert_count):
+        vert = model_vertex()
+        vert.x = read_float(f)
+        vert.y = read_float(f)
+        vert.z = read_float(f)
+
+        vert.n_x = read_norm(f)
+        vert.n_y = read_norm(f)
+
+        vert.uv_x = read_float16(f)
+        vert.uv_y = read_float16(f)
+        verts.append(vert)
     
-    # read into objects
-    f.read(4) # this int is unknown for now
-    meshes_count = read_uint(f)
-    meshes = []
-
-
-    # debug
-    print(meshes_count)
-    print(len(verts))
-    print(len(indices))
-
-    for i in range(0, meshes_count):
-        mesh = model_mesh()
-        mesh.name = read_string(f)
-        mesh.unk4byters = f.read(72)
-        mesh.label = read_string(f)
-        mesh.indices_offset = read_uint(f)
-        mesh.last_indices_offset = read_uint(f)
-        mesh.unk_offset = read_uint(f)
-        mesh.unk_count = read_uint(f)
-        mesh.coord_stuff = f.read(64)
-        mesh._indices_offset = read_uint(f)
-        mesh._unk_offset = read_uint(f)
-        mesh.indices_count = read_uint(f)
-        meshes.append(mesh)
-
-    # generate the verts into a compatible format
-    blender_verts = []
-    blender_UVs = []
-    blender_normals = []
-    for vert in verts:
-        blender_verts.append((vert.x, vert.y, vert.z))
-        blender_UVs.append((vert.uv_x, vert.uv_y))
-        blender_normals.append((quaternion_to_euler_angle(vert.n_w, vert.n_x, vert.n_y, vert.n_z)))
-
-    # # testing whole thing
-    # bpy_mesh = bpy.data.meshes.new("myMesh")
-    # obj = bpy.data.objects.new(mesh.name, bpy_mesh)
-    # bpy.context.collection.objects.link(obj)
-
-    # blender_indices = []
-    # for i in range(0, (len(indices)) //3):
-    #     index = i*3
-    #     blender_indices.append((indices[index], indices[index+1], indices[index+2]))
-    
-    # bpy_mesh.from_pydata(blender_verts, [], blender_indices)
-    
-    # uv_layer = bpy_mesh.uv_layers.new()
-    # bpy_mesh.uv_layers.active = uv_layer
-    # for face in bpy_mesh.polygons:
-    #     for vert_idx, loop_idx in zip(face.vertices, face.loop_indices):
-    #         uv_layer.data[loop_idx].uv = blender_UVs[vert_idx]
-
-    # return {'FINISHED'}
+    # read indices
+    indices = read_model_indices(f)
+    # read objects
+    meshes = read_model_mesh(f)
 
     # now we can load all this into blender
     for mesh in meshes:
         bpy_mesh = bpy.data.meshes.new("myMesh")
         obj = bpy.data.objects.new(mesh.name, bpy_mesh)
         bpy.context.collection.objects.link(obj)
+
+        # gather local verts
+        blender_verts = []
+        blender_UVs = []
+        blender_normals = []
+        for i in range(mesh.first_vert_index, mesh.last_vert_index+1):
+            vert = verts[i]
+            blender_verts.append((vert.x, vert.y, vert.z))
+            blender_UVs.append((vert.uv_x, vert.uv_y))
+
+            yaw = vert.n_y
+            pitch = vert.n_x
+            x = math.cos(yaw)*math.cos(pitch)
+            y = math.sin(yaw)*math.cos(pitch)
+            z = math.sin(pitch)
+            blender_normals.append((x, y, z)) 
+
         # gather all the indices together
         blender_indices = []
-        try:
-            for i in range(0, mesh.unk_count):
-                index = (i*3)+mesh.unk_offset
-                blender_indices.append((indices[index], indices[index+1], indices[index+2]))
-        except:
-            print("mc error")
-            print(i)
-            print(index)
-            print(len(indices))
-            
-            # label = "" # 0x8A, 10bytes
-            # indices_offset = 0 # 0x94, 4bytes
-            # last_indices_offset = 0 # 0x98, 4bytes
-            # unk_offset = 0 # 0x9C, 4bytes
-            # coord_stuff = [] # 0xA0, 68bytes
-            # _indices_offset = 0 # 0xE4, 4bytes
-            # _unk_offset = 0 # 0xE8, 4bytes
-            # indices_count = 0 # 0xEC, 4bytes
-            print(mesh.name)
-            print(mesh.label)
-            print(mesh.indices_offset)
-            print(mesh.last_indices_offset)
-            print(mesh._indices_offset)
-            print(mesh._unk_offset)
-            print(mesh.indices_count)
-            raise
+        for i in range(0, mesh.triangles_count):
+            index = (i*3)+mesh.indices_offset
+            blender_indices.append((indices[index]-mesh.first_vert_index, indices[index+1]-mesh.first_vert_index, indices[index+2]-mesh.first_vert_index))
 
         bpy_mesh.from_pydata(blender_verts, [], blender_indices)
         
+        # no idea what this does, bing gave me this
         uv_layer = bpy_mesh.uv_layers.new()
         bpy_mesh.uv_layers.active = uv_layer
         for face in bpy_mesh.polygons:
             for vert_idx, loop_idx in zip(face.vertices, face.loop_indices):
                 uv_layer.data[loop_idx].uv = blender_UVs[vert_idx]
+        
+        # no idea if this actually works, bing also gave me this
+        normals2 = []
+        for l in bpy_mesh.loops:
+            normals2.append(blender_normals[l.vertex_index])
+        # Set the custom split normals for the mesh
+        bpy_mesh.normals_split_custom_set(normals2)
+        bpy_mesh.use_auto_smooth = True
 
 
     return {'FINISHED'}
+
+class bone_data:
+    unk_uint = 0
+    float_unk1 = 0
+    float_unk2 = 0
+    float_unk3 = 0
+    float_unk4 = 0 # typically 1.0
+    float_unk5 = 0 # typically 1.0
+    float_unk6 = 0 # typically 1.0
+    float_unk7 = 0 # typically 1.0
+    uint_flags = 0
+    pos_x = 0
+    pos_y = 0
+    pos_z = 0
+
+
+model_vertex_size = 32
+class bone_vertex:
+    x = 0.0     # 0x00, float
+    y = 0.0     # 0x04, float
+    z = 0.0     # 0x08, float
+    n_x = 0.0   # 0x0C, uint
+    n_y = 0.0   # 0x10, uint
+    uv_x = 0.0  # 0x14, float16
+    uv_y = 0.0  # 0x16, float16
+    bone_weights = 0 # 0x18, uint
+    bone_indices = 0 # 0x1C, uint
+
+
+def read_some_rigged_data(context, filepath, use_some_setting):
+    print("running read_some_data...")
+    f = open(filepath, mode="rb")
+    header = read_model_header(f)
+
+    bone_count = read_uint(f)
+    bone_names = []
+    for i in range(0, bone_count):
+        curr_bone = read_fixed_string(f, 32)
+        bone_names.append(curr_bone)
+    
+    bone_parents = []
+    for i in range(0, bone_count):
+        bone_parents.append(read_int(f)) # first will be -1 for the base bone
+    
+    bone_unknown_index1 = read_uint(f)
+    bone_unknown_index2 = read_uint(f)
+    bone_unknown_index3 = read_uint(f) 
+
+    # then read the bone orientation things
+    bone_orientations = []
+    for i in range(0, bone_count):
+        orientation = bone_data()
+        orientation.unk_uint = read_uint(f)
+        orientation.float_unk1 = read_float(f)
+        orientation.float_unk2 = read_float(f)
+        orientation.float_unk3 = read_float(f)
+        orientation.float_unk4 = read_float(f)
+        orientation.float_unk5 = read_float(f)
+        orientation.float_unk6 = read_float(f)
+        orientation.float_unk7 = read_float(f)
+        orientation.uint_flags = read_uint(f)
+        orientation.pos_x = read_float(f)
+        orientation.pos_y = read_float(f)
+        orientation.pos_z = read_float(f)
+        bone_orientations.append(orientation)
+    
+    # then theres a buncha random junk here (5 position floats)
+    unk_pos1 = read_float(f)
+    unk_pos2 = read_float(f)
+    unk_pos3 = read_float(f)
+    unk_pos4 = read_float(f)
+    unk_pos5 = read_float(f)
+
+    # then read the vertices
+    vert_something = read_int(f)
+    vert_byte_length = read_int(f)
+    # read verts
+    vert_count = vert_byte_length // model_vertex_size
+    verts = []
+    for i in range(0, vert_count):
+        vert = bone_vertex()
+        vert.x = read_float(f)
+        vert.y = read_float(f)
+        vert.z = read_float(f)
+        vert.n_x = read_norm(f)
+        vert.n_y = read_norm(f)
+        vert.uv_x = read_float16(f)
+        vert.uv_y = read_float16(f)
+        vert.bone_weights = read_uint(f)
+        vert.bone_indices = read_uint(f)
+        verts.append(vert)
+
+    # read indices
+    indices = read_model_indices(f)
+    # read objects
+    meshes = read_model_mesh(f)
+
+    print(len(verts))
+    print(len(indices))
+    print(len(meshes))
+    print(len(meshes[0].parts))
+
+    # now we can load all this into blender
+    for mesh in meshes:
+
+        for part in mesh.parts:
+            #part_mat = bpy.data.materials.new(name=part.label)
+            #obj.data.materials.append(part_mat)
+            bpy_mesh = bpy.data.meshes.new("myMesh")
+            obj = bpy.data.objects.new(mesh.name + "_" + part.label, bpy_mesh)
+            bpy.context.collection.objects.link(obj)
+
+            # gather local verts
+            blender_verts = []
+            blender_UVs = []
+            blender_normals = []
+            for i in range(part.first_vert_index, part.last_vert_index+1):
+                vert = verts[i]
+                blender_verts.append((vert.x, vert.y, vert.z))
+                blender_UVs.append((vert.uv_x, vert.uv_y))
+                blender_normals.append((math.cos(vert.n_y)*math.cos(vert.n_x), math.sin(vert.n_y)*math.cos(vert.n_x), math.sin(vert.n_x))) 
+
+            # gather all the indices together
+            blender_indices = []
+            for i in range(0, part.triangles_count):
+                index = (i*3)+part.indices_offset
+                blender_indices.append((indices[index]-part.first_vert_index, indices[index+1]-part.first_vert_index, indices[index+2]-part.first_vert_index))
+
+            bpy_mesh.from_pydata(blender_verts, [], blender_indices)
+            
+            print("exporting mesh")
+
+            #########  EXTRA JUNK ########
+            # no idea what this does, bing gave me this
+            uv_layer = bpy_mesh.uv_layers.new()
+            bpy_mesh.uv_layers.active = uv_layer
+            for face in bpy_mesh.polygons:
+                for vert_idx, loop_idx in zip(face.vertices, face.loop_indices):
+                    uv_layer.data[loop_idx].uv = blender_UVs[vert_idx]
+            # no idea if this actually works, bing also gave me this
+            normals2 = []
+            for l in bpy_mesh.loops:
+                normals2.append(blender_normals[l.vertex_index])
+            # Set the custom split normals for the mesh
+            bpy_mesh.normals_split_custom_set(normals2)
+            bpy_mesh.use_auto_smooth = True
+
+    
+    return {'FINISHED'}
+
+
+
 
 
 # ImportHelper is a helper class, defines filename and
@@ -288,7 +417,7 @@ class ImportSomeData(Operator, ImportHelper):
     )
 
     def execute(self, context):
-        return read_some_data(context, self.filepath, self.use_setting)
+        return read_some_rigged_data(context, self.filepath, self.use_setting)
 
 
 # Only needed if you want to add into a dynamic menu.
