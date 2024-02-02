@@ -56,6 +56,7 @@ def read_model_mesh(f):
         mesh = model_mesh()
         mesh.name = read_string(f)
         mesh.unk_count = read_uint(f)
+        mesh.unkers = []
         for js in range(0, mesh.unk_count):
             unker = model_mesh_unk()
             unker.unk1 = read_uint(f)
@@ -65,6 +66,7 @@ def read_model_mesh(f):
             mesh.unkers.append(unker)
 
         mesh.part_count = read_uint(f)
+        mesh.parts = []
         for js in range(0, mesh.part_count):
             part = model_mesh_part()
             part.label = read_string(f)
@@ -129,6 +131,7 @@ def read_fixed_string(f, length):
 def read_model_header(f):
     header = model_header()
     header.sig_count = read_int(f)
+    header.signatures = []
     for i in range(0, header.sig_count):
         sig = model_header_signature()
         sig.signature = read_string(f)
