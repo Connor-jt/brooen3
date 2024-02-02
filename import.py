@@ -2,7 +2,8 @@ import bpy
 import bmesh
 import struct
 import math
-
+import os
+from bpy.props import StringProperty, BoolProperty, EnumProperty, CollectionProperty
 
 model_header_size = 24
 class model_header_signature:
@@ -155,6 +156,7 @@ def read_model_indices(f):
     else: raise Exception("bad vert indices byte width")
     return indices
 
+
 def construct_meshes(meshes, verts, indices, bone_count = -1, bone_names = [], bone_orientations = [], bone_parents = []):
     for mesh in meshes:
         for part in mesh.parts:
@@ -163,6 +165,11 @@ def construct_meshes(meshes, verts, indices, bone_count = -1, bone_names = [], b
             bpy_mesh = bpy.data.meshes.new("myMesh")
             obj = bpy.data.objects.new(mesh.name + "_" + part.label, bpy_mesh)
             bpy.context.collection.objects.link(obj)
+
+            # create and assign material
+            mat = bpy.data.materials.get(part.label)
+            if mat is None: mat = bpy.data.materials.new(part.label)
+            obj.data.materials.append(mat)
 
             # gather local verts
             blender_verts = []
@@ -267,10 +274,13 @@ def read_static_model(context, filepath):
     f = open(filepath, mode="rb")
     header = read_model_header(f)
 
-    vert_something = read_int(f)
+    vert_stride = read_int(f)
     vert_byte_length = read_int(f)
+    # error checking
+    vert_padding = vert_stride - model_vertex_size
+    if vert_padding < 0: raise Exception("vertex stride is smaller than regular size (we'll lose vertex data)")
     # read verts
-    vert_count = vert_byte_length // model_vertex_size
+    vert_count = vert_byte_length // vert_stride
     verts = []
     for i in range(0, vert_count):
         vert = model_vertex()
@@ -284,55 +294,11 @@ def read_static_model(context, filepath):
         vert.uv_x = read_float16(f)
         vert.uv_y = read_float16(f)
         verts.append(vert)
+        # skip padding
+        if vert_padding != 0: f.read(vert_padding)
     
     # read indices
     indices = read_model_indices(f)
-    # read objects
-    meshes = read_model_mesh(f)
-    # construct
-    construct_meshes(meshes, verts, indices)
-
-    f.close()
-    return {'FINISHED'}
-
-
-map_model_vertex_size = 32
-class map_model_vertex:
-    x = 0.0     # 0x00, float
-    y = 0.0     # 0x04, float
-    z = 0.0     # 0x08, float
-    n_x = 0.0   # 0x0C, uint
-    n_y = 0.0   # 0x10, uint
-    uv_x = 0.0  # 0x14, float16
-    uv_y = 0.0  # 0x16, float16
-    unk_float = 0.0
-    unk_uint = 0.0
-def read_map_model(context, filepath):
-    print("running read_some_data...")
-    f = open(filepath, mode="rb")
-    header = read_model_header(f)
-
-    vert_something = read_int(f)
-    vert_byte_length = read_int(f)
-    # read verts
-    vert_count = vert_byte_length // map_model_vertex_size
-    verts = []
-    for i in range(0, vert_count):
-        vert = map_model_vertex()
-        vert.x = read_float(f)
-        vert.y = read_float(f)
-        vert.z = read_float(f)
-        vert.n_x = read_norm(f)
-        vert.n_y = read_norm(f)
-        vert.uv_x = read_float16(f)
-        vert.uv_y = read_float16(f)
-        vert.unk_float = read_float(f)
-        vert.unk_uint = read_uint(f)
-        verts.append(vert)
-    
-    # read indices
-    indices = read_model_indices(f)
-
     # read objects
     meshes = read_model_mesh(f)
     # construct
@@ -409,11 +375,13 @@ def read_rigged_model(context, filepath):
     unk_pos7 = read_float(f)
     unk_pos8 = read_float(f)
 
-    # then read the vertices
-    vert_something = read_int(f)
+    vert_stride = read_int(f)
     vert_byte_length = read_int(f)
+    # error checking
+    vert_padding = vert_stride - skinned_model_vertex_size
+    if vert_padding < 0: raise Exception("vertex stride is smaller than regular size (we'll lose vertex data)")
     # read verts
-    vert_count = vert_byte_length // skinned_model_vertex_size
+    vert_count = vert_byte_length // vert_stride
     verts = []
     for i in range(0, vert_count):
         vert = bone_vertex()
@@ -427,6 +395,8 @@ def read_rigged_model(context, filepath):
         vert.bone_weights = read_uint(f)
         vert.bone_indices = read_uint(f)
         verts.append(vert)
+        # skip padding
+        if vert_padding != 0: f.read(vert_padding)
 
     # read indices
     indices = read_model_indices(f)
@@ -449,42 +419,48 @@ from bpy.types import Operator
 
 
 class ImportSomeData(Operator, ImportHelper):
-    """This appears in the tooltip of the operator and in the generated docs"""
+    """Import model files from Hydro Thunder Hurricane"""
     bl_idname = "import_test.some_data"  # important since its how bpy.ops.import_test.some_data is constructed
-    bl_label = "Import Some Data"
-
+    bl_label = "Import Hydro Thunder models"
     # ImportHelper mix-in class uses this.
-    filename_ext = ".txt"
-
+    #filename_ext = ".txt"
     filter_glob: StringProperty(
         default="*.dat",
         options={'HIDDEN'},
-        maxlen=255,  # Max internal buffer length, longer would be clamped.
-    )
+        maxlen=255,)  # Max internal buffer length, longer would be clamped.
 
     type: EnumProperty(
         name="Import type",
         description="Choose type of model to import",
         items=(
             ('OPT_A', "Static model", "Import a static model"),
-            ('OPT_B', "Map model", "Import a map model"),
-            ('OPT_C', "Skinned model", "Import a skinned model"),
+            ('OPT_B', "Skinned model", "Import a skinned model"),
         ),
-        default='OPT_A',
-    )
+        default='OPT_A',)
+    
+    # Enable multiple file selection
+    files: CollectionProperty(
+        type=bpy.types.OperatorFileListElement,
+        options={'HIDDEN', 'SKIP_SAVE'},)
+    # Store the folder path
+    directory: StringProperty(
+        subtype='DIR_PATH',)
+
 
     def execute(self, context):
-        if self.type == 'OPT_A':
-            return read_static_model(context, self.filepath)
-        elif self.type == "OPT_B":
-            return read_map_model(context, self.filepath)
-        else:
-            return read_rigged_model(context, self.filepath)
+        for file in self.files:
+            filepath = os.path.join(self.directory, file.name)
+            print(filepath)
+            if self.type == 'OPT_A':
+                read_static_model(context, filepath)
+            elif self.type == "OPT_B":
+                read_rigged_model(context, filepath)
+        return {'FINISHED'}
 
 
 # Only needed if you want to add into a dynamic menu.
 def menu_func_import(self, context):
-    self.layout.operator(ImportSomeData.bl_idname, text="Text Import Operator")
+    self.layout.operator(ImportSomeData.bl_idname, text="Hydro Thunder Import")
 
 
 # Register and add to the "file selector" menu (required to use F3 search "Text Import Operator" for quick access).
