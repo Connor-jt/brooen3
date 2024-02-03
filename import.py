@@ -145,15 +145,17 @@ def read_model_indices(f):
     # read indices
     indicies_byte_length = read_uint(f)
     indicies_width = read_uint(f)
-    indicies_byte_length //= indicies_width
     indices = []
     if indicies_width == 3: # 4 byte width indices
+        indicies_byte_length //= 4
         for i in range(0, indicies_byte_length):
             indices.append(read_uint(f))
     elif indicies_width == 2: # 2 byte wide indices
+        indicies_byte_length //= 2
         for i in range(0, indicies_byte_length):
             indices.append(read_ushort(f))
     elif indicies_width == 1: # 1 byte wide indices # UNCONFIRMED!!!!
+        indicies_byte_length //= 1
         for i in range(0, indicies_byte_length):
             indices.append(read_ubyte(f))
     else: raise Exception("bad vert indices byte width")
