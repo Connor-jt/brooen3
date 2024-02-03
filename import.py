@@ -147,12 +147,15 @@ def read_model_indices(f):
     indicies_width = read_uint(f)
     indicies_byte_length //= indicies_width
     indices = []
-    if indicies_width == 4: # 4 byte width indices
+    if indicies_width == 3: # 4 byte width indices
         for i in range(0, indicies_byte_length):
             indices.append(read_uint(f))
     elif indicies_width == 2: # 2 byte wide indices
         for i in range(0, indicies_byte_length):
             indices.append(read_ushort(f))
+    elif indicies_width == 1: # 1 byte wide indices # UNCONFIRMED!!!!
+        for i in range(0, indicies_byte_length):
+            indices.append(read_ubyte(f))
     else: raise Exception("bad vert indices byte width")
     return indices
 
@@ -269,7 +272,7 @@ def construct_meshes(meshes, verts, indices, bone_count = -1, bone_names = [], b
                         groups_array[bone4].add([i], weight4, 'ADD')
 
 
-def read_static_model(context, filepath):
+def read_static_model(context, filepath, import_as_single = False):
     print("running read_some_data...")
     f = open(filepath, mode="rb")
     header = read_model_header(f)
@@ -302,7 +305,18 @@ def read_static_model(context, filepath):
     # read objects
     meshes = read_model_mesh(f)
     # construct
-    construct_meshes(meshes, verts, indices)
+    if import_as_single:
+        blender_verts = []
+        blender_indices = []
+        for vert in verts: blender_verts.append((vert.x, vert.y, vert.z))
+        for i in range(0, len(indices)//3): blender_indices.append((indices[(i*3)], indices[(i*3)+1], indices[(i*3)+2]))
+        bpy_mesh = bpy.data.meshes.new("myMesh")
+        obj = bpy.data.objects.new("whole_mesh", bpy_mesh)
+        bpy.context.collection.objects.link(obj)
+        bpy_mesh.from_pydata(blender_verts, [], blender_indices)
+    
+    else:
+        construct_meshes(meshes, verts, indices)
 
     f.close()
     return {'FINISHED'}
@@ -434,6 +448,7 @@ class ImportSomeData(Operator, ImportHelper):
         description="Choose type of model to import",
         items=(
             ('OPT_A', "Static model", "Import a static model"),
+            ('OPT_C', "Static model (single mesh)", "Import a static model"),
             ('OPT_B', "Skinned model", "Import a skinned model"),
         ),
         default='OPT_A',)
@@ -452,7 +467,9 @@ class ImportSomeData(Operator, ImportHelper):
             filepath = os.path.join(self.directory, file.name)
             print(filepath)
             if self.type == 'OPT_A':
-                read_static_model(context, filepath)
+                read_static_model(context, filepath, False)
+            elif self.type == 'OPT_C':
+                read_static_model(context, filepath, True)
             elif self.type == "OPT_B":
                 read_rigged_model(context, filepath)
         return {'FINISHED'}
