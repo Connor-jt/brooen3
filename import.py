@@ -4,6 +4,7 @@ import struct
 import math
 import os
 from bpy.props import StringProperty, BoolProperty, EnumProperty, CollectionProperty
+import mathutils
 
 model_header_size = 24
 class model_header_signature:
@@ -22,6 +23,7 @@ class model_vertex:
     n_y = 0.0   # 0x10, uint
     uv_x = 0.0  # 0x14, float16
     uv_y = 0.0  # 0x16, float16
+    color = None
 
 
 class model_mesh_unk:
@@ -30,13 +32,23 @@ class model_mesh_unk:
     unk3 = 0 # uint
     unk4 = 0 # uint, larger number? flags?
 
+class object_coords:
+    min_x = 0.0
+    min_y = 0.0
+    min_z = 0.0
+    yaw = 0.0
+    max_x = 0.0
+    max_y = 0.0
+    max_z = 0.0
+    pitch = 0.0
+
 class model_mesh_part:
     label = ""
     first_vert_index = 0
     last_vert_index = 0 
     indices_offset = 0 
     triangles_count = 0
-    coord_stuff = [] # 32 bytes
+    coords = object_coords()
 
 class model_mesh:
     name = "" # 0x00, 66bytes
@@ -44,10 +56,22 @@ class model_mesh:
     unkers = []
     part_count = 0
     parts = []
-    coord_stuff = [] # 32 bnytes
+    coords = object_coords()
     first_vert_index = 0
     indices_offset = 0
     vert_count = 0 
+
+def read_coords(f):
+    result = object_coords()
+    result.min_x = read_float(f)
+    result.min_y = read_float(f)
+    result.min_z = read_float(f)
+    result.yaw   = read_float(f)
+    result.max_x = read_float(f)
+    result.max_y = read_float(f)
+    result.max_z = read_float(f)
+    result.pitch = read_float(f)
+    return result
 
 def read_model_mesh(f):
     f.read(4) # this int is unknown for now
@@ -75,10 +99,10 @@ def read_model_mesh(f):
             part.last_vert_index = read_uint(f)
             part.indices_offset = read_uint(f)
             part.triangles_count = read_uint(f)
-            part.coord_stuff = f.read(32)
+            part.coords = read_coords(f)
             mesh.parts.append(part)
 
-        mesh.coord_stuff = f.read(32)
+        mesh.coords = read_coords(f)
         mesh.first_vert_index = read_uint(f)
         mesh.indices_offset = read_uint(f)
         mesh.vert_count = read_uint(f)
@@ -163,6 +187,7 @@ def read_model_indices(f):
 
 
 def construct_meshes(meshes, verts, indices, bone_count = -1, bone_names = [], bone_orientations = [], bone_parents = []):
+    has_vert_color = verts[0].color != None
     for mesh in meshes:
         for part in mesh.parts:
             #part_mat = bpy.data.materials.new(name=part.label)
@@ -170,6 +195,13 @@ def construct_meshes(meshes, verts, indices, bone_count = -1, bone_names = [], b
             bpy_mesh = bpy.data.meshes.new("myMesh")
             obj = bpy.data.objects.new(mesh.name + "_" + part.label, bpy_mesh)
             bpy.context.collection.objects.link(obj)
+            # set orientation
+            #bpy.context.scene.cursor.location = mathutils.Vector((part.coords.min_x, part.coords.min_y, part.coords.min_z))
+            #bpy.ops.object.origin_set({"object": obj}, type="ORIGIN_CURSOR")
+            #obj.location = (part.coords.min_x-part.coords.max_x, part.coords.min_y-part.coords.max_y, part.coords.min_z-part.coords.max_z)
+            #aobj.location = ((part.coords.min_x+part.coords.max_x)/2, (part.coords.min_y+part.coords.max_y)/2, (part.coords.min_z+part.coords.max_z)/2)
+            #obj.location = (part.coords.min_x, part.coords.min_y, part.coords.min_z)
+            #obj.rotation_euler = (math.radians(part.coords.pitch), math.radians(part.coords.yaw), 0)
 
             # create and assign material
             mat = bpy.data.materials.get(part.label)
@@ -180,11 +212,14 @@ def construct_meshes(meshes, verts, indices, bone_count = -1, bone_names = [], b
             blender_verts = []
             blender_UVs = []
             blender_normals = []
+            blender_vert_colors = []
             for i in range(part.first_vert_index, part.last_vert_index+1):
                 vert = verts[i]
                 blender_verts.append((vert.x, vert.y, vert.z))
                 blender_UVs.append((vert.uv_x, vert.uv_y))
                 blender_normals.append((math.cos(vert.n_y)*math.cos(vert.n_x), math.sin(vert.n_y)*math.cos(vert.n_x), math.sin(vert.n_x))) 
+                if has_vert_color == True: blender_vert_colors.append( ((vert.color&255)/255, ((vert.color>>8)&255)/255.0, ((vert.color>>16)&255)/255.0, (vert.color>>24)/255.0 ) )
+
 
             # gather all the indices together
             blender_indices = []
@@ -208,6 +243,16 @@ def construct_meshes(meshes, verts, indices, bone_count = -1, bone_names = [], b
             # Set the custom split normals for the mesh
             bpy_mesh.normals_split_custom_set(normals2)
             bpy_mesh.use_auto_smooth = True
+            
+            ####### VERT COLOR JUNK ####
+            if has_vert_color == True:
+                # Get the vertex color layer
+                color_layer = bpy_mesh.vertex_colors.new(name="vert_colors")
+                # Set the color of each vertex
+                for face in bpy_mesh.polygons:
+                    for vert_idx, loop_idx in zip(face.vertices, face.loop_indices):
+                        color_layer.data[loop_idx].color = blender_vert_colors[vert_idx]
+                        #print(idx)
 
             ####### BONE JUNK #########
             if bone_count != -1:
@@ -273,7 +318,6 @@ def construct_meshes(meshes, verts, indices, bone_count = -1, bone_names = [], b
                         weight4 = (vert.bone_weights >> 26 & 0x1F) / 31.0
                         groups_array[bone4].add([i], weight4, 'ADD')
 
-
 def read_static_model(context, filepath, import_as_single = False):
     print("running read_some_data...")
     f = open(filepath, mode="rb")
@@ -284,6 +328,10 @@ def read_static_model(context, filepath, import_as_single = False):
     # error checking
     vert_padding = vert_stride - model_vertex_size
     if vert_padding < 0: raise Exception("vertex stride is smaller than regular size (we'll lose vertex data)")
+    if vert_stride >= model_vertex_size+4:
+        has_vert_color = True
+        vert_padding -= 4
+        print("vertex colors!!!!")
     # read verts
     vert_count = vert_byte_length // vert_stride
     verts = []
@@ -298,6 +346,10 @@ def read_static_model(context, filepath, import_as_single = False):
 
         vert.uv_x = read_float16(f)
         vert.uv_y = read_float16(f)
+        # if possible, do vertex colors
+        if has_vert_color == True:
+            vert.color = read_uint(f)
+
         verts.append(vert)
         # skip padding
         if vert_padding != 0: f.read(vert_padding)
@@ -432,8 +484,6 @@ def read_rigged_model(context, filepath):
 from bpy_extras.io_utils import ImportHelper
 from bpy.props import StringProperty, BoolProperty, EnumProperty
 from bpy.types import Operator
-
-
 class ImportSomeData(Operator, ImportHelper):
     """Import model files from Hydro Thunder Hurricane"""
     bl_idname = "import_test.some_data"  # important since its how bpy.ops.import_test.some_data is constructed
@@ -475,24 +525,16 @@ class ImportSomeData(Operator, ImportHelper):
             elif self.type == "OPT_B":
                 read_rigged_model(context, filepath)
         return {'FINISHED'}
-
-
 # Only needed if you want to add into a dynamic menu.
 def menu_func_import(self, context):
     self.layout.operator(ImportSomeData.bl_idname, text="Hydro Thunder Import")
-
-
 # Register and add to the "file selector" menu (required to use F3 search "Text Import Operator" for quick access).
 def register():
     bpy.utils.register_class(ImportSomeData)
     bpy.types.TOPBAR_MT_file_import.append(menu_func_import)
-
-
 def unregister():
     bpy.utils.unregister_class(ImportSomeData)
     bpy.types.TOPBAR_MT_file_import.remove(menu_func_import)
-
-
 if __name__ == "__main__":
     register()
 
