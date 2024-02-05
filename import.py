@@ -5,6 +5,7 @@ import math
 import os
 from bpy.props import StringProperty, BoolProperty, EnumProperty, CollectionProperty
 import mathutils
+from mathutils import Matrix
 
 model_header_size = 24
 class model_header_signature:
@@ -32,7 +33,7 @@ class model_mesh_unk:
     unk3 = 0 # uint
     unk4 = 0 # uint, larger number? flags?
 
-class object_coords:
+class object_bounds:
     min_x = 0.0
     min_y = 0.0
     min_z = 0.0
@@ -48,7 +49,7 @@ class model_mesh_part:
     last_vert_index = 0 
     indices_offset = 0 
     triangles_count = 0
-    coords = object_coords()
+    bounds = object_bounds()
 
 class model_mesh:
     name = "" # 0x00, 66bytes
@@ -56,13 +57,36 @@ class model_mesh:
     unkers = []
     part_count = 0
     parts = []
-    coords = object_coords()
+    bounds = object_bounds()
     first_vert_index = 0
     indices_offset = 0
     vert_count = 0 
 
-def read_coords(f):
-    result = object_coords()
+class model_coord_data:
+    name = ""
+    unk = 0
+    label = ""
+    matrix_1 = 0.0
+    matrix_2 = 0.0
+    matrix_3 = 0.0
+    matrix_4 = 0.0
+    matrix_5 = 0.0
+    matrix_6 = 0.0
+    matrix_7 = 0.0
+    matrix_8 = 0.0
+    matrix_9 = 0.0
+    matrix_10 = 0.0
+    matrix_11 = 0.0
+    matrix_12 = 0.0
+    matrix_13 = 0.0
+    matrix_14 = 0.0
+    matrix_15 = 0.0
+    matrix_16 = 0.0
+    bounds = object_bounds()
+
+
+def read_bounds(f):
+    result = object_bounds()
     result.min_x = read_float(f)
     result.min_y = read_float(f)
     result.min_z = read_float(f)
@@ -99,15 +123,39 @@ def read_model_mesh(f):
             part.last_vert_index = read_uint(f)
             part.indices_offset = read_uint(f)
             part.triangles_count = read_uint(f)
-            part.coords = read_coords(f)
+            part.bounds = read_bounds(f)
             mesh.parts.append(part)
 
-        mesh.coords = read_coords(f)
+        mesh.bounds = read_bounds(f)
         mesh.first_vert_index = read_uint(f)
         mesh.indices_offset = read_uint(f)
         mesh.vert_count = read_uint(f)
         meshes.append(mesh)
     return meshes
+
+def read_model_coords(f):
+    result = model_coord_data()
+    #result.label     = read_string(f) # theres no way for us to read this
+    result.matrix_1  = read_float(f)
+    result.matrix_2  = read_float(f)
+    result.matrix_3  = read_float(f)
+    result.matrix_4  = read_float(f)
+    result.matrix_5  = read_float(f)
+    result.matrix_6  = read_float(f)
+    result.matrix_7  = read_float(f)
+    result.matrix_8  = read_float(f)
+    result.matrix_9  = read_float(f)
+    result.matrix_10 = read_float(f)
+    result.matrix_11 = read_float(f)
+    result.matrix_12 = read_float(f)
+    result.matrix_13 = read_float(f)
+    result.matrix_14 = read_float(f)
+    result.matrix_15 = read_float(f)
+    result.matrix_16 = read_float(f)
+    result.bounds    = read_bounds(f)
+    #result.unk       = read_ubyte(f) # no point in reading this data 
+    #result.name      = read_string(f)
+    return result # theres also seemingly a single byte that goes before this data?
 
 
 # shorthand functions
@@ -186,22 +234,67 @@ def read_model_indices(f):
     return indices
 
 
-def construct_meshes(meshes, verts, indices, bone_count = -1, bone_names = [], bone_orientations = [], bone_parents = []):
+########## DEBUG ###########
+def set_origin(obj, global_coord):
+    # Get the local coordinate of the global point
+    local_coord = obj.matrix_world.inverted() @ global_coord
+    # Transform the mesh by the negative of the local point
+    obj.data.transform(mathutils.Matrix.Translation(-local_coord))
+    # Move the object by the difference of the global point and the object's location
+    obj.matrix_world.translation += (global_coord - obj.matrix_world.translation)
+
+def construct_meshes(meshes, verts, indices, f, bone_count = -1, bone_names = [], bone_orientations = [], bone_parents = []):
     has_vert_color = verts[0].color != None
+    bytes_offset = f.tell()
+    excess_bytes = f.read() 
     for mesh in meshes:
+        # get alternate component mesh component (cant just read there because theres too much junk in the way)
+        offset = excess_bytes.find(mesh.name.encode('utf-8'))
+        if offset < 0: raise Exception("failed to find position data for " + mesh.name)
+
+        f.seek(bytes_offset + offset - 97)
+        # then read that junk
+        coord_data = read_model_coords(f)
+        object_pos_matrix = Matrix((
+            (coord_data.matrix_1,  coord_data.matrix_2,  coord_data.matrix_3,  coord_data.matrix_4 ),
+            (coord_data.matrix_5,  coord_data.matrix_6,  coord_data.matrix_7,  coord_data.matrix_8 ),
+            (coord_data.matrix_9,  coord_data.matrix_10, coord_data.matrix_11, coord_data.matrix_12),
+            (coord_data.matrix_13, coord_data.matrix_14, coord_data.matrix_15, coord_data.matrix_16)))
+        #coord_data_origin = ((coord_data.bounds.min_x+coord_data.bounds.max_x)/2, (coord_data.bounds.min_y+coord_data.bounds.max_y)/2, (coord_data.bounds.min_z+coord_data.bounds.max_z)/2)
+        #coord_data_origin = (coord_data.bounds.min_x, coord_data.bounds.min_y, coord_data.bounds.min_z)
+        coord_data_origin = (coord_data.bounds.max_x, coord_data.bounds.max_y, coord_data.bounds.max_z)
+
         for part in mesh.parts:
             #part_mat = bpy.data.materials.new(name=part.label)
             #obj.data.materials.append(part_mat)
             bpy_mesh = bpy.data.meshes.new("myMesh")
             obj = bpy.data.objects.new(mesh.name + "_" + part.label, bpy_mesh)
+            #print(mesh.name + "_" + part.label)
             bpy.context.collection.objects.link(obj)
-            # set orientation
-            #bpy.context.scene.cursor.location = mathutils.Vector((part.coords.min_x, part.coords.min_y, part.coords.min_z))
+            # set orientation (we need to set the origin point first !!!!)
+            #origin = ((mesh.bounds.min_x+mesh.bounds.max_x)/2, (mesh.bounds.min_y+mesh.bounds.max_y)/2, (mesh.bounds.min_z+mesh.bounds.max_z)/2)
+            origin = (mesh.bounds.min_x, mesh.bounds.min_y, mesh.bounds.min_z)
+            #origin = (mesh.bounds.max_x, mesh.bounds.max_y, mesh.bounds.max_z)
+            obj.matrix_world = object_pos_matrix # set world pos first, as cursor overrides this??
+            #print(object_pos_matrix.to_translation())
+            #print(coord_data_origin)
+            obj.location = obj.location + mathutils.Vector(origin)
+            #obj.location = obj.location + mathutils.Vector(coord_data_origin)
+            # bpy.ops.object.mode_set(mode='OBJECT')
+            # obj.select_set(True)
+            # bpy.context.scene.cursor.location = mathutils.Vector(origin)
+            # bpy.ops.object.origin_set(type='ORIGIN_CURSOR')
+            # obj.select_set(False)
+            #print(obj.location)
+            #obj.matrix_world = object_pos_matrix
+            #print(obj.location)
+            #set_origin(obj, mathutils.Vector(((part.bounds.min_x+part.bounds.max_x)/2, (part.bounds.min_y+part.bounds.max_y)/2, (part.bounds.min_z+part.bounds.max_z)/2)))
+            #bpy.context.scene.cursor.location = mathutils.Vector((part.bounds.min_x, part.bounds.min_y, part.bounds.min_z))
             #bpy.ops.object.origin_set({"object": obj}, type="ORIGIN_CURSOR")
-            #obj.location = (part.coords.min_x-part.coords.max_x, part.coords.min_y-part.coords.max_y, part.coords.min_z-part.coords.max_z)
-            #aobj.location = ((part.coords.min_x+part.coords.max_x)/2, (part.coords.min_y+part.coords.max_y)/2, (part.coords.min_z+part.coords.max_z)/2)
-            #obj.location = (part.coords.min_x, part.coords.min_y, part.coords.min_z)
-            #obj.rotation_euler = (math.radians(part.coords.pitch), math.radians(part.coords.yaw), 0)
+            #obj.location = (part.bounds.min_x-part.bounds.max_x, part.bounds.min_y-part.bounds.max_y, part.bounds.min_z-part.bounds.max_z)
+            #aobj.location = ((part.bounds.min_x+part.bounds.max_x)/2, (part.bounds.min_y+part.bounds.max_y)/2, (part.bounds.min_z+part.bounds.max_z)/2)
+            #obj.location = (part.bounds.min_x, part.bounds.min_y, part.bounds.min_z)
+            #obj.rotation_euler = (math.radians(part.bounds.pitch), math.radians(part.bounds.yaw), 0)
 
             # create and assign material
             mat = bpy.data.materials.get(part.label)
@@ -215,7 +308,9 @@ def construct_meshes(meshes, verts, indices, bone_count = -1, bone_names = [], b
             blender_vert_colors = []
             for i in range(part.first_vert_index, part.last_vert_index+1):
                 vert = verts[i]
-                blender_verts.append((vert.x, vert.y, vert.z))
+                blender_verts.append((vert.x-origin[0], vert.y-origin[1], vert.z-origin[2]))
+                #blender_verts.append((vert.x-coord_data_origin[0], vert.y-coord_data_origin[1], vert.z-coord_data_origin[2]))
+                #blender_verts.append((vert.x, vert.y, vert.z))
                 blender_UVs.append((vert.uv_x, vert.uv_y))
                 blender_normals.append((math.cos(vert.n_y)*math.cos(vert.n_x), math.sin(vert.n_y)*math.cos(vert.n_x), math.sin(vert.n_x))) 
                 if has_vert_color == True: blender_vert_colors.append( ((vert.color&255)/255, ((vert.color>>8)&255)/255.0, ((vert.color>>16)&255)/255.0, (vert.color>>24)/255.0 ) )
@@ -326,6 +421,7 @@ def read_static_model(context, filepath, import_as_single = False):
     vert_stride = read_int(f)
     vert_byte_length = read_int(f)
     # error checking
+    has_vert_color = False
     vert_padding = vert_stride - model_vertex_size
     if vert_padding < 0: raise Exception("vertex stride is smaller than regular size (we'll lose vertex data)")
     if vert_stride >= model_vertex_size+4:
@@ -370,7 +466,7 @@ def read_static_model(context, filepath, import_as_single = False):
         bpy_mesh.from_pydata(blender_verts, [], blender_indices)
     
     else:
-        construct_meshes(meshes, verts, indices)
+        construct_meshes(meshes, verts, indices, f)
 
     f.close()
     return {'FINISHED'}
@@ -471,7 +567,7 @@ def read_rigged_model(context, filepath):
     # read objects
     meshes = read_model_mesh(f)
     # now we can load all this into blender
-    construct_meshes(meshes, verts, indices, bone_count, bone_names, bone_orientations, bone_parents)
+    construct_meshes(meshes, verts, indices, f, bone_count, bone_names, bone_orientations, bone_parents)
     f.close()
     return {'FINISHED'}
 
