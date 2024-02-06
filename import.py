@@ -243,11 +243,32 @@ def set_origin(obj, global_coord):
     # Move the object by the difference of the global point and the object's location
     obj.matrix_world.translation += (global_coord - obj.matrix_world.translation)
 
+def add_object(name,x,y,z):
+    bpy_mesh = bpy.data.meshes.new("myMesh")
+    obj = bpy.data.objects.new(name, bpy_mesh)
+    bpy.context.collection.objects.link(obj)
+    obj.location = obj.location + mathutils.Vector((x,y,z))
+
+    bpy.context.view_layer.objects.active = obj
+    obj.select_set(True)
+
+    bm = bmesh.new()
+    bmesh.ops.create_uvsphere(bm, u_segments=32, v_segments=16, radius=1)
+    bm.to_mesh(bpy_mesh)
+    bm.free()
+
+    obj.select_set(False)
+
+
+
 def construct_meshes(meshes, verts, indices, f, bone_count = -1, bone_names = [], bone_orientations = [], bone_parents = []):
     has_vert_color = verts[0].color != None
     bytes_offset = f.tell()
     excess_bytes = f.read() 
+    
+    mesh_index = 0
     for mesh in meshes:
+        mesh_index += 1
         # get alternate component mesh component (cant just read there because theres too much junk in the way)
         offset = excess_bytes.find(mesh.name.encode('utf-8'))
         if offset < 0: raise Exception("failed to find position data for " + mesh.name)
@@ -261,14 +282,25 @@ def construct_meshes(meshes, verts, indices, f, bone_count = -1, bone_names = []
             (coord_data.matrix_9,  coord_data.matrix_10, coord_data.matrix_11, coord_data.matrix_12),
             (coord_data.matrix_13, coord_data.matrix_14, coord_data.matrix_15, coord_data.matrix_16)))
         #coord_data_origin = ((coord_data.bounds.min_x+coord_data.bounds.max_x)/2, (coord_data.bounds.min_y+coord_data.bounds.max_y)/2, (coord_data.bounds.min_z+coord_data.bounds.max_z)/2)
-        #coord_data_origin = (coord_data.bounds.min_x, coord_data.bounds.min_y, coord_data.bounds.min_z)
-        coord_data_origin = (coord_data.bounds.max_x, coord_data.bounds.max_y, coord_data.bounds.max_z)
+        coord_data_origin = (coord_data.bounds.min_x, coord_data.bounds.min_y, coord_data.bounds.min_z)
+        #coord_data_origin = (coord_data.bounds.max_x, coord_data.bounds.max_y, coord_data.bounds.max_z)
 
+
+        add_object(str(mesh_index) +"_b_min", mesh.bounds.min_x, mesh.bounds.min_y, mesh.bounds.min_z )
+        add_object(str(mesh_index) +"_b_max", mesh.bounds.max_x, mesh.bounds.max_y, mesh.bounds.max_z )
+        add_object(str(mesh_index) +"_m_min", coord_data.bounds.min_x, coord_data.bounds.min_y, coord_data.bounds.min_z )
+        add_object(str(mesh_index) +"_m_max", coord_data.bounds.max_x, coord_data.bounds.max_y, coord_data.bounds.max_z )
+
+        part_index = 0
         for part in mesh.parts:
+            part_index += 1
+            add_object(str(mesh_index) +"_"+str(part_index)+"_min", part.bounds.min_x, part.bounds.min_y, part.bounds.min_z )
+            add_object(str(mesh_index) +"_"+str(part_index)+"_max", part.bounds.max_x, part.bounds.max_y, part.bounds.max_z )
+
             #part_mat = bpy.data.materials.new(name=part.label)
             #obj.data.materials.append(part_mat)
             bpy_mesh = bpy.data.meshes.new("myMesh")
-            obj = bpy.data.objects.new(mesh.name + "_" + part.label, bpy_mesh)
+            obj = bpy.data.objects.new(str(mesh_index) +"_"+ str(part_index) +"_"+ mesh.name +"_"+ part.label, bpy_mesh)
             #print(mesh.name + "_" + part.label)
             bpy.context.collection.objects.link(obj)
             # set orientation (we need to set the origin point first !!!!)
@@ -278,8 +310,8 @@ def construct_meshes(meshes, verts, indices, f, bone_count = -1, bone_names = []
             obj.matrix_world = object_pos_matrix # set world pos first, as cursor overrides this??
             #print(object_pos_matrix.to_translation())
             #print(coord_data_origin)
-            obj.location = obj.location + mathutils.Vector(origin)
-            #obj.location = obj.location + mathutils.Vector(coord_data_origin)
+            #obj.location = obj.location + mathutils.Vector(origin)
+            obj.location = obj.location + mathutils.Vector(coord_data_origin)
             # bpy.ops.object.mode_set(mode='OBJECT')
             # obj.select_set(True)
             # bpy.context.scene.cursor.location = mathutils.Vector(origin)
@@ -412,6 +444,19 @@ def construct_meshes(meshes, verts, indices, f, bone_count = -1, bone_names = []
                     if bone4 != bone3:
                         weight4 = (vert.bone_weights >> 26 & 0x1F) / 31.0
                         groups_array[bone4].add([i], weight4, 'ADD')
+
+    # output debug information
+    # mesh_index = 0
+    # for mesh in meshes:
+    #     mesh_index += 1
+
+    #     part_index = 0
+    #     for part in mesh.parts:
+    #         part_index += 1
+
+
+
+
 
 def read_static_model(context, filepath, import_as_single = False):
     print("running read_some_data...")
